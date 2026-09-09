@@ -1,12 +1,12 @@
 # Composizione Bancali — Infermentum
 
-App web per il reparto confezionamento: dall'ordine (pezzi / codici iMio) al piano di carico dei bancali.
+App web per il reparto logistica: dall'ordine (pezzi / codici iMio) al piano di carico dei bancali.
 Sito statico + Supabase (login team, salvataggio ordini, regole condivise).
 
 ## Cosa fa
 - Inserimento ordine a mano, incollato o da Excel/CSV (riconosce i codici iMio: RI…, RP…, BB…, BA…, P…, EI…, BBM01)
 - Conversione pezzi → scatole (pezzi/scatola per prodotto, da anagrafica)
-- Composizione bancali: riempimento in altezza sul 120×80, combinazione dei resti, pedana piccola per i lievitati (scatola P ≤72 pz, scatola C ≤42 pz)
+- Composizione bancali: le scatole si combinano in altezza (max 187 cm su 120×80/80×80, 162 su 60×80), le varietà si fondono per tipo di scatola e i vuoti di una fila si riempiono con le scatole più piccole rimaste; si scende su 80×80 quando l'intero ordine ci sta
 - Salvataggio/ricarica ordini e composizioni (Supabase)
 - Regole (soglie, misure scatole, altezze bancali) modificabili e condivise con il team
 
@@ -47,3 +47,9 @@ Trascina la cartella su https://app.netlify.com/drop — pubblica subito. (Gli a
 ## File
 - `index.html` — l'app completa (HTML/CSS/JS, tutto in un file)
 - `netlify.toml` — configurazione Netlify (sito statico)
+- `manifest.webmanifest` — icona e nome per "Aggiungi a Home" sul telefono
+- `apple-touch-icon.png`, `icon-192.png`, `icon-512.png`, `favicon.png` — icone dell'app
+
+## Icona sul telefono
+Apri il sito, poi **Condividi → Aggiungi a Home** (iPhone) o **menù → Installa app** (Android):
+compare l'icona del bancale con il nome **Bancali**, e l'app si apre a schermo intero senza barre del browser.

@@ -1,0 +1,17 @@
+{
+  "name": "Composizione Bancali — Infermentum",
+  "short_name": "Bancali",
+  "description": "Dall'ordine al piano di carico dei bancali · Reparto logistica Infermentum",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0d6d61",
+  "theme_color": "#0d6d61",
+  "lang": "it",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "apple-touch-icon.png", "sizes": "180x180", "type": "image/png" }
+  ]
+}
