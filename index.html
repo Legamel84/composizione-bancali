@@ -599,30 +599,111 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
     for(var i=0;i<PRODUCTS.length;i++){if(l.indexOf(PRODUCTS[i].d.toLowerCase())>=0)return PRODUCTS[i].c;}
     return null;
   }
-  var parsedRows=null,drop=$("drop"),file=$("file");
-  drop.addEventListener("click",function(){file.click();});
+  var parsedRows=null,layout=null,lastImport={},drop=$("drop"),file=$("file");
+  // NB: l'input file è dentro la <label>, quindi il click lo apre già: nessun file.click() manuale (rompe Safari)
   ["dragover","dragenter"].forEach(function(e){drop.addEventListener(e,function(ev){ev.preventDefault();drop.classList.add("over");});});
   ["dragleave","drop"].forEach(function(e){drop.addEventListener(e,function(ev){ev.preventDefault();drop.classList.remove("over");});});
-  drop.addEventListener("drop",function(ev){if(ev.dataTransfer.files[0])readFile(ev.dataTransfer.files[0]);});
+  drop.addEventListener("drop",function(ev){if(ev.dataTransfer&&ev.dataTransfer.files[0])readFile(ev.dataTransfer.files[0]);});
   file.addEventListener("change",function(){if(file.files[0])readFile(file.files[0]);});
-  function readFile(f){$("dropTitle").textContent=f.name;var rd=new FileReader();rd.onload=function(e){try{var wb=XLSX.read(e.target.result,{type:"array"});var ws=wb.Sheets[wb.SheetNames[0]];parsedRows=XLSX.utils.sheet_to_json(ws,{header:1,blankrows:false});showMap();}catch(err){$("mapWrap").innerHTML='<div class="note err">Impossibile leggere il file: '+err.message+'</div>';}};rd.readAsArrayBuffer(f);}
+  function impMsg(html){$("mapWrap").innerHTML=html;}
+  function parseCSV(text){
+    var first=(text.split(/\r?\n/)[0]||"");
+    var sep=",";
+    if(first.split(";").length>first.split(sep).length)sep=";";
+    if(first.split("\t").length>first.split(sep).length)sep="\t";
+    return text.split(/\r?\n/).filter(function(l){return l.trim()!=="";})
+      .map(function(l){return l.split(sep).map(function(c){return c.replace(/^"(.*)"$/,"$1").trim();});});
+  }
+  function readFile(f){
+    $("dropTitle").textContent=f.name;
+    var isCsv=/\.csv$/i.test(f.name), rd=new FileReader();
+    rd.onerror=function(){impMsg('<div class="note err">Impossibile leggere il file.</div>');};
+    rd.onload=function(e){
+      try{
+        if(isCsv){parsedRows=parseCSV(String(e.target.result));}
+        else{
+          if(typeof XLSX==="undefined"){impMsg('<div class="note err">Libreria Excel non disponibile (rete bloccata?). Salva l’ordine in CSV e ricaricalo.</div>');return;}
+          var wb=XLSX.read(e.target.result,{type:"array"});
+          var ws=wb.Sheets[wb.SheetNames[0]];
+          parsedRows=XLSX.utils.sheet_to_json(ws,{header:1,blankrows:false});
+        }
+        showMap();
+      }catch(err){impMsg('<div class="note err">Impossibile leggere il file: '+err.message+'</div>');}
+    };
+    if(isCsv)rd.readAsText(f); else rd.readAsArrayBuffer(f);
+  }
+  function detectLayout(rows){
+    for(var r=0;r<Math.min(rows.length,20);r++){
+      var row=rows[r]||[],ci=-1,qi=-1;
+      for(var c=0;c<row.length;c++){
+        var v=String(row[c]==null?"":row[c]).toLowerCase();
+        if(ci<0&&/codic|artic|\bcod\b|sigla/.test(v))ci=c;
+        if(qi<0&&/quant|q\.t|qta|pezzi|\bpz\b|\bnum/.test(v))qi=c;
+      }
+      if(ci>=0&&qi>=0)return {headerIdx:r,dataStart:r+1,colP:ci,colQ:qi};
+    }
+    for(var r2=0;r2<Math.min(rows.length,40);r2++){
+      var row2=rows[r2]||[];
+      for(var c2=0;c2<row2.length;c2++){
+        if(matchByCode(row2[c2])){
+          var qc=-1;
+          for(var c3=0;c3<row2.length;c3++){
+            if(c3===c2)continue;
+            var n=parseFloat(String(row2[c3]).replace(/[^0-9.,-]/g,"").replace(",","."));
+            if(!isNaN(n)&&n>0){qc=c3;break;}
+          }
+          return {headerIdx:(r2>0?r2-1:null),dataStart:r2,colP:c2,colQ:(qc>=0?qc:c2+1)};
+        }
+      }
+    }
+    return null;
+  }
   function showMap(){
-    if(!parsedRows||!parsedRows.length){$("mapWrap").innerHTML='<div class="note err">File vuoto.</div>';return;}
-    var header=parsedRows[0].map(function(h,i){return (h===undefined||h===null||h==="")?("Colonna "+(i+1)):String(h);});
-    var gP=0,gQ=header.length>1?1:0;
-    header.forEach(function(h,i){var l=String(h).toLowerCase();if(/codic|artic|\bcod\b|sigla/.test(l))gP=i;if(/quant|q\.t|qta|pezzi|pz|num/.test(l))gQ=i;});
-    var opt=function(sel){return header.map(function(h,i){return '<option value="'+i+'"'+(i===sel?" selected":"")+'>'+h+'</option>';}).join("");};
-    $("mapWrap").innerHTML='<div class="mapui"><div class="g"><div><label style="font-size:.66rem;color:var(--ink-3)">Colonna codice articolo</label><select id="colP">'+opt(gP)+'</select></div><div><label style="font-size:.66rem;color:var(--ink-3)">Colonna quantità (pezzi)</label><select id="colQ">'+opt(gQ)+'</select></div></div><div class="btnrow" style="margin-top:0"><button class="btn" id="doImport" type="button">Importa ordine</button></div><div id="importInfo"></div></div>';
+    if(!parsedRows||!parsedRows.length){impMsg('<div class="note err">Il file risulta vuoto.</div>');return;}
+    layout=detectLayout(parsedRows);
+    var ncol=0;parsedRows.forEach(function(r){if(r&&r.length>ncol)ncol=r.length;});
+    if(!layout)layout={headerIdx:0,dataStart:1,colP:0,colQ:(ncol>1?1:0)};
+    var hdr=[];
+    for(var i=0;i<ncol;i++){
+      var h=(layout.headerIdx!=null&&parsedRows[layout.headerIdx])?parsedRows[layout.headerIdx][i]:null;
+      hdr.push((h===undefined||h===null||String(h).trim()==="")?("Colonna "+(i+1)):String(h));
+    }
+    var opt=function(sel){return hdr.map(function(h,i){return '<option value="'+i+'"'+(i===sel?" selected":"")+'>'+h+'</option>';}).join("");};
+    impMsg('<div class="mapui"><div class="g"><div><label style="font-size:.66rem;color:var(--ink-3)">Colonna codice articolo</label><select id="colP">'+opt(layout.colP)+'</select></div><div><label style="font-size:.66rem;color:var(--ink-3)">Colonna quantità (pezzi)</label><select id="colQ">'+opt(layout.colQ)+'</select></div></div><div class="btnrow" style="margin-top:0"><button class="btn" id="doImport" type="button">Reimporta</button></div><div id="importInfo"></div></div>');
+    $("colP").addEventListener("change",doImport);
+    $("colQ").addEventListener("change",doImport);
     $("doImport").addEventListener("click",doImport);
+    doImport();
   }
   function doImport(){
-    var cp=+$("colP").value,cq=+$("colQ").value,ig=$("ignoreOnes").checked,add={},unm=[],ignored=0;
-    for(var i=1;i<parsedRows.length;i++){var row=parsedRows[i];if(!row)continue;var name=row[cp],q=parseFloat(String(row[cq]).replace(/[^0-9.,-]/g,"").replace(",","."));if((name===undefined||name==="")&&row[cq]===undefined)continue;if(isNaN(q)||q<=0)continue;if(ig&&q<=1){ignored++;continue;}var k=matchByCode(name);if(k)add[k]=(add[k]||0)+q;else if(name)unm.push(String(name));}
-    Object.keys(add).forEach(function(k){ORDER[k]=(ORDER[k]||0)+Math.round(add[k]);});
-    renderOrderLines();
-    var info='<div style="font-size:.74rem;margin-top:8px;color:var(--good)">Importati '+Object.keys(add).length+' prodotti'+(ignored?' · '+ignored+' voci da 1 pz ignorate':'')+'.</div>';
-    if(unm.length)info+='<div class="unmatched">Non riconosciuti: '+unm.slice(0,8).join(", ")+(unm.length>8?"…":"")+'</div>';
-    $("importInfo").innerHTML=info;compute();
+    if(!parsedRows||!layout)return;
+    var cp=+$("colP").value,cq=+$("colQ").value,ig=$("ignoreOnes").checked;
+    Object.keys(lastImport).forEach(function(k){if(ORDER[k]){ORDER[k]-=lastImport[k];if(ORDER[k]<=0)delete ORDER[k];}});
+    lastImport={};
+    var add={},unm=[],ignored=0,letti=0;
+    for(var i=layout.dataStart;i<parsedRows.length;i++){
+      var row=parsedRows[i];if(!row)continue;
+      var name=row[cp];
+      var q=parseFloat(String(row[cq]===undefined?"":row[cq]).replace(/[^0-9.,-]/g,"").replace(",","."));
+      if((name===undefined||String(name).trim()==="")&&isNaN(q))continue;
+      letti++;
+      if(isNaN(q)||q<=0)continue;
+      if(ig&&q<=1){ignored++;continue;}
+      var k=matchByCode(name);
+      if(k)add[k]=(add[k]||0)+q;
+      else if(name!==undefined&&String(name).trim()!=="")unm.push(String(name).trim());
+    }
+    Object.keys(add).forEach(function(k){var v=Math.round(add[k]);ORDER[k]=(ORDER[k]||0)+v;lastImport[k]=v;});
+    renderOrderLines();compute();
+    var n=Object.keys(add).length;
+    var info='<div style="font-size:.74rem;margin-top:8px;color:'+(n?'var(--good)':'var(--bad)')+'">'+
+      (n?('Importati '+n+' prodotti'):'Nessun codice riconosciuto')+' · '+letti+' righe lette'+(ignored?(' · '+ignored+' da 1 pz ignorate'):'')+'.</div>';
+    if(unm.length){
+      var uu=[];unm.forEach(function(x){if(uu.indexOf(x)<0&&uu.length<10)uu.push(x);});
+      info+='<div class="unmatched">Codici non riconosciuti: '+uu.join(", ")+(unm.length>uu.length?"…":"")+'</div>';
+    }
+    if(!n)info+='<div style="font-size:.72rem;color:var(--ink-3);margin-top:4px;">Verifica che la colonna del codice sia quella giusta (es. RI01, BB01, P01).</div>';
+    $("importInfo").innerHTML=info;
   }
   $("pasteBtn").addEventListener("click",function(){
     var t=$("paste").value.trim();if(!t)return;var lines=t.split(/\n/),add={},ig=$("ignoreOnes").checked;
@@ -633,7 +714,7 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
   $("addBtn").addEventListener("click",function(){var c=$("prodSel").value,q=+$("prodQty").value;if(q>0){addProduct(c,q);$("prodQty").value="";renderOrderLines();compute();}});
   $("prodQty").addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();$("addBtn").click();}});
   $("calcBtn").addEventListener("click",compute);
-  $("clearBtn").addEventListener("click",function(){ORDER={};renderOrderLines();LAST=null;render();});
+  $("clearBtn").addEventListener("click",function(){ORDER={};lastImport={};renderOrderLines();LAST=null;render();});
 
   /* ===== Supabase: config, orders, settings ===== */
   function applyConfig(cfg){
