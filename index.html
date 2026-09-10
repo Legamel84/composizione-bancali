@@ -1139,20 +1139,15 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
     }
     if(cQ<0)return null;
     // numero ordine: colonna con valori ripetuti, non codice ne quantita, la piu numerica
-    var cO=-1,cC=-1;
+    var cO=-1,cC=-1,ndOf=function(x){return Object.keys(distinct[x]).length;};
     for(c=0;c<ncol;c++){
       if(c===cP||c===cQ||!filled[c])continue;
-      var nd=Object.keys(distinct[c]).length;
-      if(nd>=filled[c])continue;
-      if(numc[c]/filled[c]>.5){ if(cO<0)cO=c; }
-      else if(texty[c]/filled[c]>.5){ if(cC<0)cC=c; }
+      var nd=ndOf(c);
+      if(nd<2||nd>=filled[c])continue;            // costante o tutta diversa: non raggruppa
+      if(numc[c]/filled[c]>.5){ if(cO<0||nd>ndOf(cO))cO=c; }
+      else if(texty[c]/filled[c]>.5){ if(cC<0||nd>ndOf(cC))cC=c; }
     }
-    if(cO<0){
-      for(c=0;c<ncol;c++){
-        if(c===cP||c===cQ||c===cC||!filled[c])continue;
-        if(Object.keys(distinct[c]).length<filled[c]){cO=c;break;}
-      }
-    }
+    if(cO<0&&cC>=0&&ndOf(cC)>=2){cO=cC;cC=-1;}     // solo una colonna che raggruppa: e' l'ordine
     if(cO<0)return null;
     return {headerIdx:(start>0?start-1:null),dataStart:start,colO:cO,colC:cC,colP:cP,colQ:cQ};
   }
@@ -1192,7 +1187,7 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
   function buildBatch(){
     if(!bRows||!bLayout)return;
     var cO=+$("bcolO").value,cC=+$("bcolC").value,cP=+$("bcolP").value,cQ=+$("bcolQ").value;
-    var map={},ordKeys=[],unm=[],ignored=0,righe=0;
+    var map={},ordKeys=[],unm=[],ignored=0,righe=0,cliSet={};
     for(var i=bLayout.dataStart;i<bRows.length;i++){
       var row=bRows[i];if(!row)continue;
       var num=String(row[cO]===undefined?"":row[cO]).trim();
@@ -1204,6 +1199,7 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
       if(isNaN(q)||q<=0)continue;
       if(q<=1){ignored++;continue;}
       if(!code){if(raw!==undefined&&String(raw).trim()!=="")unm.push(String(raw).trim());continue;}
+      if(cli)cliSet[cli]=1;
       var key=num||"(senza numero)";
       if(!map[key]){map[key]={num:key,cli:cli,items:{}};ordKeys.push(key);}
       if(!map[key].cli&&cli)map[key].cli=cli;
@@ -1213,11 +1209,17 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
       var o=map[k],plan=buildPlan(o.items,false);
       return {num:o.num,cli:o.cli,items:o.items,lines:plan.lines,pallets:plan.pallets,edited:false};
     });
-    renderBatch({unm:unm,ignored:ignored,righe:righe});
+    renderBatch({unm:unm,ignored:ignored,righe:righe,nCli:Object.keys(cliSet).length,noNum:(ordKeys.length===1&&ordKeys[0]==="(senza numero)")});
   }
   function renderBatch(info){
     var R=$("bresults");
-    if(!BATCH.length){R.innerHTML='<div class="card"><div class="empty"><div class="ico">📄</div><p>Nessun ordine riconosciuto nel file. Controlla le colonne selezionate.</p></div></div>';return;}
+    if(!BATCH.length){
+      var ncolF=0;(bRows||[]).forEach(function(r){if(r&&r.length>ncolF)ncolF=r.length;});
+      R.innerHTML='<div class="card"><div class="empty"><div class="ico">📄</div><p>Nessun ordine riconosciuto nel file. Controlla le colonne indicate qui sopra.</p>'+
+        (ncolF<3?'<p style="font-size:.78rem;color:var(--ink-3);margin-top:6px;">Questo file ha solo '+ncolF+' colonne: sembra un ordine singolo. Usa la scheda <b>Ordine singolo</b>.</p>':'')+
+        '</div></div>';
+      if($("bmapFields")){$("bmapFields").hidden=false;if($("bmapBtns"))$("bmapBtns").hidden=false;if($("bmapToggle"))$("bmapToggle").textContent="nascondi";}
+      return;}
     var tp=0,tc=0,tz=0;
     BATCH.forEach(function(o){tp+=o.pallets.length;o.lines.forEach(function(l){tc+=l.colli;tz+=l.pieces;});});
     var html='<div class="tiles">'+
@@ -1226,6 +1228,13 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
       '<div class="tile"><div class="k">Scatole (colli)</div><div class="v">'+fmt(tc)+'</div><div class="sub">da '+fmt(tz)+' pezzi</div></div>'+
       '<div class="tile"><div class="k">Pezzi totali</div><div class="v">'+fmt(tz)+'</div><div class="sub">esclusi mono-pezzo</div></div></div>';
     html+='<div class="card" style="margin-top:18px;"><h3><span>Composizione per ordine</span><small>clicca Modifica per intervenire a mano</small></h3>';
+    if(info&&BATCH.length===1&&info.righe>3){
+      html+='<p class="note err">Attenzione: è stato trovato <b>un solo numero ordine</b>'+
+        (info.nCli>1?(' ma '+info.nCli+' clienti diversi'):'')+
+        ', quindi tutte le righe del file sono state unite in un unico ordine'+
+        (info.noNum?' (colonna numero ordine vuota)':'')+
+        '. Controlla la colonna «Numero ordine» qui sopra.</p>';
+    }
     if(info&&(info.unm&&info.unm.length||info.ignored)){
       var uu=[];(info.unm||[]).forEach(function(x){if(uu.indexOf(x)<0&&uu.length<10)uu.push(x);});
       html+='<p class="note">'+(info.ignored?info.ignored+' voci da 1 pezzo ignorate. ':'')+(uu.length?('Codici non riconosciuti: '+uu.join(", ")):'')+'</p>';
@@ -1247,6 +1256,10 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
     });
     html+='</div><div class="btnrow"><button class="btn" id="bCopy" type="button">Copia tutte le composizioni</button><span id="bCopyMsg" style="align-self:center;font-size:.76rem;color:var(--good);"></span></div></div>';
     R.innerHTML=html;
+    if(info&&BATCH.length===1&&info.righe>3&&$("bmapFields")&&$("bmapFields").hidden){
+      $("bmapFields").hidden=false;if($("bmapBtns"))$("bmapBtns").hidden=false;
+      if($("bmapToggle"))$("bmapToggle").textContent="nascondi";
+    }
     Array.prototype.forEach.call(R.querySelectorAll("[data-open]"),function(b){
       b.addEventListener("click",function(){openBatchOrder(+b.getAttribute("data-open"));});
     });
