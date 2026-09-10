@@ -115,6 +115,10 @@ textarea.inp{font-family:"IBM Plex Mono";font-size:.78rem;min-height:70px;resize
 .btnrow{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;}
 .chk{display:flex;gap:8px;align-items:center;font-size:.76rem;color:var(--ink-2);cursor:pointer;margin-top:10px;}
 .chk input{width:15px;height:15px;accent-color:var(--primary);}
+.mapsum{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;font-size:.74rem;color:var(--ink-2);}
+.mapsum b{color:var(--ink);font-weight:600;}
+.mapsum .ok{color:var(--good);font-weight:700;}
+.lnk{background:none;border:none;padding:0;margin:0;color:var(--primary);font:inherit;font-size:.72rem;text-decoration:underline;cursor:pointer;}
 .mapui{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-s);padding:11px;font-size:.76rem;margin-top:8px;}
 .mapui .g{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;}
 .mapui select{width:100%;border:1px solid var(--line-2);background:var(--surface);color:var(--ink);border-radius:7px;padding:6px;font:inherit;font-size:.76rem;}
@@ -397,6 +401,7 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
 (function(){
   "use strict";
   var $=function(id){return document.getElementById(id);};
+  function esc(t){return String(t==null?"":t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
 
   /* ===== Supabase ===== */
   var SUPA_URL="https://kwqouuoyszpptrxktppk.supabase.co";
@@ -852,12 +857,16 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
   file.addEventListener("change",function(){if(file.files[0])readFile(file.files[0]);});
   function impMsg(html){$("mapWrap").innerHTML=html;}
   function parseCSV(text){
-    var first=(text.split(/\r?\n/)[0]||"");
-    var sep=",";
-    if(first.split(";").length>first.split(sep).length)sep=";";
-    if(first.split("\t").length>first.split(sep).length)sep="\t";
-    return text.split(/\r?\n/).filter(function(l){return l.trim()!=="";})
-      .map(function(l){return l.split(sep).map(function(c){return c.replace(/^"(.*)"$/,"$1").trim();});});
+    var lines=text.split(/\r?\n/).filter(function(l){return l.trim()!=="";});
+    // il separatore si sceglie sulle prime righe (le prime possono essere titoli senza separatori)
+    var cands=[";",",","\t"],sep=";",best=-1;
+    cands.forEach(function(cd){
+      var tot=0,n=Math.min(lines.length,12);
+      for(var i=0;i<n;i++)tot+=lines[i].split(cd).length-1;
+      if(tot>best){best=tot;sep=cd;}
+    });
+    if(best<=0)sep=";";
+    return lines.map(function(l){return l.split(sep).map(function(c){return c.replace(/^"(.*)"$/,"$1").trim();});});
   }
   function readFile(f){
     $("dropTitle").textContent=f.name;
@@ -905,7 +914,8 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
   }
   function showMap(){
     if(!parsedRows||!parsedRows.length){impMsg('<div class="note err">Il file risulta vuoto.</div>');return;}
-    layout=detectLayout(parsedRows);
+    var det=detectLayout(parsedRows);
+    layout=det;
     var ncol=0;parsedRows.forEach(function(r){if(r&&r.length>ncol)ncol=r.length;});
     if(!layout)layout={headerIdx:0,dataStart:1,colP:0,colQ:(ncol>1?1:0)};
     var hdr=[];
@@ -913,11 +923,18 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
       var h=(layout.headerIdx!=null&&parsedRows[layout.headerIdx])?parsedRows[layout.headerIdx][i]:null;
       hdr.push((h===undefined||h===null||String(h).trim()==="")?("Colonna "+(i+1)):String(h));
     }
-    var opt=function(sel){return hdr.map(function(h,i){return '<option value="'+i+'"'+(i===sel?" selected":"")+'>'+h+'</option>';}).join("");};
-    impMsg('<div class="mapui"><div class="g"><div><label style="font-size:.66rem;color:var(--ink-3)">Colonna codice articolo</label><select id="colP">'+opt(layout.colP)+'</select></div><div><label style="font-size:.66rem;color:var(--ink-3)">Colonna quantità (pezzi)</label><select id="colQ">'+opt(layout.colQ)+'</select></div></div><div class="btnrow" style="margin-top:0"><button class="btn" id="doImport" type="button">Reimporta</button></div><div id="importInfo"></div></div>');
+    var opt=function(sel){return hdr.map(function(h,i){return '<option value="'+i+'"'+(i===sel?" selected":"")+'>'+esc(h)+'</option>';}).join("");};
+    var sum=det
+      ? '<div class="mapsum"><span class="ok">✓ colonne riconosciute</span><span>codice: <b>'+esc(hdr[layout.colP])+'</b> · quantità: <b>'+esc(hdr[layout.colQ])+'</b></span><button class="lnk" id="mapToggle" type="button">cambia colonne</button></div>'
+      : '<div class="mapsum"><span style="color:var(--warn);font-weight:700;">Colonne non riconosciute</span><span>controlla quali usare:</span></div>';
+    impMsg('<div class="mapui">'+sum+'<div class="g" id="mapFields"'+(det?' hidden':'')+'><div><label style="font-size:.66rem;color:var(--ink-3)">Colonna codice articolo</label><select id="colP">'+opt(layout.colP)+'</select></div><div><label style="font-size:.66rem;color:var(--ink-3)">Colonna quantità (pezzi)</label><select id="colQ">'+opt(layout.colQ)+'</select></div></div><div class="btnrow" id="mapBtns" style="margin-top:0"'+(det?' hidden':'')+'><button class="btn" id="doImport" type="button">Reimporta</button></div><div id="importInfo"></div></div>');
     $("colP").addEventListener("change",doImport);
     $("colQ").addEventListener("change",doImport);
     $("doImport").addEventListener("click",doImport);
+    if($("mapToggle"))$("mapToggle").addEventListener("click",function(){
+      var f=$("mapFields"),b=$("mapBtns"),h=!f.hidden;f.hidden=h;b.hidden=h;
+      $("mapToggle").textContent=h?"cambia colonne":"nascondi";
+    });
     doImport();
   }
   function doImport(){
@@ -1081,11 +1098,68 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
       }
       if(o>=0&&co>=0&&q>=0)return {headerIdx:r,dataStart:r+1,colO:o,colC:cl,colP:co,colQ:q};
     }
-    return null;
+    return detectBatchByData(rows);
+  }
+  // fallback: nessuna intestazione riconoscibile -> si deduce dal contenuto
+  function detectBatchByData(rows){
+    var ncol=0,i,c;
+    for(i=0;i<rows.length;i++){if(rows[i]&&rows[i].length>ncol)ncol=rows[i].length;}
+    if(ncol<3)return null;
+    var lim=Math.min(rows.length,400);
+    var hits=[],firstHit=[];
+    for(c=0;c<ncol;c++){hits[c]=0;firstHit[c]=-1;}
+    for(i=0;i<lim;i++){
+      var row=rows[i];if(!row)continue;
+      for(c=0;c<ncol;c++){
+        if(matchByCode(row[c])){hits[c]++;if(firstHit[c]<0)firstHit[c]=i;}
+      }
+    }
+    var cP=-1;for(c=0;c<ncol;c++){if(hits[c]>0&&(cP<0||hits[c]>hits[cP]))cP=c;}
+    if(cP<0)return null;
+    var start=firstHit[cP];
+    // quantità: colonna piu numerica (esclusa quella dei codici), preferendo quelle a destra del codice
+    var numc=[],distinct=[],texty=[],filled=[];
+    for(c=0;c<ncol;c++){numc[c]=0;filled[c]=0;texty[c]=0;distinct[c]={};}
+    for(i=start;i<lim;i++){
+      var r2=rows[i];if(!r2)continue;
+      for(c=0;c<ncol;c++){
+        var raw=r2[c];if(raw===undefined||raw===null||String(raw).trim()==="")continue;
+        var v=String(raw).trim();filled[c]++;distinct[c][v]=1;
+        if(/^[0-9]+([.,][0-9]+)?$/.test(v))numc[c]++;else if(/[a-zA-Z]{3,}/.test(v))texty[c]++;
+      }
+    }
+    var cQ=-1;
+    for(c=0;c<ncol;c++){
+      if(c===cP||!filled[c])continue;
+      if(numc[c]/filled[c]<.8)continue;
+      if(cQ<0)cQ=c; else {
+        var better=(numc[c]>numc[cQ])||(numc[c]===numc[cQ]&&Math.abs(c-cP)<Math.abs(cQ-cP));
+        if(better)cQ=c;
+      }
+    }
+    if(cQ<0)return null;
+    // numero ordine: colonna con valori ripetuti, non codice ne quantita, la piu numerica
+    var cO=-1,cC=-1;
+    for(c=0;c<ncol;c++){
+      if(c===cP||c===cQ||!filled[c])continue;
+      var nd=Object.keys(distinct[c]).length;
+      if(nd>=filled[c])continue;
+      if(numc[c]/filled[c]>.5){ if(cO<0)cO=c; }
+      else if(texty[c]/filled[c]>.5){ if(cC<0)cC=c; }
+    }
+    if(cO<0){
+      for(c=0;c<ncol;c++){
+        if(c===cP||c===cQ||c===cC||!filled[c])continue;
+        if(Object.keys(distinct[c]).length<filled[c]){cO=c;break;}
+      }
+    }
+    if(cO<0)return null;
+    return {headerIdx:(start>0?start-1:null),dataStart:start,colO:cO,colC:cC,colP:cP,colQ:cQ};
   }
   function showBatchMap(){
     if(!bRows||!bRows.length){$("bmapWrap").innerHTML='<div class="note err">Il file risulta vuoto.</div>';return;}
-    bLayout=detectBatchLayout(bRows);
+    var bdet=detectBatchLayout(bRows);
+    bLayout=bdet;
     var ncol=0;bRows.forEach(function(r){if(r&&r.length>ncol)ncol=r.length;});
     if(!bLayout)bLayout={headerIdx:0,dataStart:1,colO:0,colC:1,colP:2,colQ:3};
     var hdr=[];
@@ -1095,16 +1169,24 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
     }
     function opt(sel,none){
       var o=none?'<option value="-1"'+(sel<0?" selected":"")+'>— nessuna —</option>':'';
-      return o+hdr.map(function(h,i){return '<option value="'+i+'"'+(i===sel?" selected":"")+'>'+h+'</option>';}).join("");
+      return o+hdr.map(function(h,i){return '<option value="'+i+'"'+(i===sel?" selected":"")+'>'+esc(h)+'</option>';}).join("");
     }
-    $("bmapWrap").innerHTML='<div class="mapui"><div class="g">'+
+    var nm=function(i){return (i>=0&&hdr[i]!==undefined)?esc(hdr[i]):"—";};
+    var bsum=bdet
+      ? '<div class="mapsum"><span class="ok">✓ colonne riconosciute</span><span>ordine: <b>'+nm(bLayout.colO)+'</b> · cliente: <b>'+nm(bLayout.colC)+'</b> · codice: <b>'+nm(bLayout.colP)+'</b> · quantità: <b>'+nm(bLayout.colQ)+'</b></span><button class="lnk" id="bmapToggle" type="button">cambia colonne</button></div>'
+      : '<div class="mapsum"><span style="color:var(--warn);font-weight:700;">Colonne non riconosciute</span><span>indica quali usare:</span></div>';
+    $("bmapWrap").innerHTML='<div class="mapui">'+bsum+'<div class="g" id="bmapFields"'+(bdet?' hidden':'')+'>'+
       '<div><label style="font-size:.66rem;color:var(--ink-3)">Numero ordine</label><select id="bcolO">'+opt(bLayout.colO)+'</select></div>'+
       '<div><label style="font-size:.66rem;color:var(--ink-3)">Cliente</label><select id="bcolC">'+opt(bLayout.colC,true)+'</select></div>'+
       '<div><label style="font-size:.66rem;color:var(--ink-3)">Codice articolo</label><select id="bcolP">'+opt(bLayout.colP)+'</select></div>'+
       '<div><label style="font-size:.66rem;color:var(--ink-3)">Quantità (pezzi)</label><select id="bcolQ">'+opt(bLayout.colQ)+'</select></div>'+
-      '</div><div class="btnrow" style="margin-top:0"><button class="btn" id="bDoImport" type="button">Calcola tutti gli ordini</button></div></div>';
+      '</div><div class="btnrow" id="bmapBtns" style="margin-top:0"'+(bdet?' hidden':'')+'><button class="btn" id="bDoImport" type="button">Calcola tutti gli ordini</button></div></div>';
     ["bcolO","bcolC","bcolP","bcolQ"].forEach(function(id){$(id).addEventListener("change",buildBatch);});
     $("bDoImport").addEventListener("click",buildBatch);
+    if($("bmapToggle"))$("bmapToggle").addEventListener("click",function(){
+      var f=$("bmapFields"),b=$("bmapBtns"),h=!f.hidden;f.hidden=h;b.hidden=h;
+      $("bmapToggle").textContent=h?"cambia colonne":"nascondi";
+    });
     buildBatch();
   }
   function buildBatch(){
