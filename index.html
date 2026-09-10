@@ -336,6 +336,7 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
         <div class="sm">numero ordine · cliente · codice · quantità</div>
       </label>
       <div id="bmapWrap"></div>
+      <label class="chk" style="margin-top:10px;"><input type="checkbox" id="bIgnoreOnes"> Ignora anche le righe da 1 pezzo (i codici fuori anagrafica sono già esclusi)</label>
     </div>
     <div id="bresults" style="margin-top:18px;"></div>
   </div>
@@ -886,29 +887,101 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
     };
     if(isCsv)rd.readAsText(f); else rd.readAsArrayBuffer(f);
   }
+  // --- riconoscimento colonne: le intestazioni orientano, i DATI decidono ---
+  var CODE_NO=/pagament|client|fiscal|\biva\b|agent|vettor|listin|destinat|banc|sconto|categor|fornitor|spedizion|valut|porto|causal|magazz|deposit|barcode|\bean\b|zona|nazion|provinc/;
+  var QTY_NO=/prezz|import|valor|sconto|\biva\b|peso|netto|lordo|riga|righe|\bnr\b|progress/;
+  // numero "vero": una cella con lettere NON e' un numero (serve a distinguere P51 da 51)
+  function cellNum(v){
+    if(typeof v==="number")return v;
+    if(v===undefined||v===null)return NaN;
+    var t=String(v).trim().replace(/[\s'\u00a0€%]/g,"");
+    if(t===""||!/^[-+]?[0-9][0-9.,]*$/.test(t))return NaN;
+    var hasC=t.indexOf(",")>=0,hasD=t.indexOf(".")>=0;
+    if(hasC&&hasD)t=(t.lastIndexOf(",")>t.lastIndexOf("."))?t.replace(/\./g,"").replace(",","."):t.replace(/,/g,"");
+    else if(hasC)t=t.replace(/,/g,".");
+    else if(hasD&&/\.[0-9]{3}(\.|$)/.test(t))t=t.replace(/\./g,"");
+    var n=parseFloat(t);
+    return isNaN(n)?NaN:n;
+  }
+  function ncolOf(rows){var n=0;for(var i=0;i<rows.length;i++){if(rows[i]&&rows[i].length>n)n=rows[i].length;}return n;}
+  // 2 = la cella E' il codice, 1 = lo contiene (es. descrizione), 0 = niente
+  function codeScore(v){
+    if(v===undefined||v===null)return 0;
+    var t=String(v).trim();
+    if(t===""||t.length>40||/^[0-9.,\-]+$/.test(t))return 0;
+    if(!matchByCode(t))return 0;
+    var flat=t.toUpperCase().replace(/[^A-Z0-9]/g,"");
+    return (BYCODE[flat]||BYSIGLA[flat])?2:1;
+  }
+  function codeLike(v){return codeScore(v)>0;}
+  function codeHits(rows,c,start,lim){
+    var n=0;for(var i=start;i<Math.min(rows.length,lim);i++){var r=rows[i];if(r&&codeLike(r[c]))n++;}return n;
+  }
+  function codeScoreCol(rows,c,start,lim){
+    var n=0;for(var i=start;i<Math.min(rows.length,lim);i++){var r=rows[i];if(r)n+=codeScore(r[c]);}return n;
+  }
+  // colonna che contiene davvero i codici articolo che conosciamo
+  function bestCodeCol(rows,start,lim){
+    var ncol=ncolOf(rows),best=-1,bh=0,first=-1;
+    for(var c=0;c<ncol;c++){
+      var n=0,f=-1;
+      for(var i=start;i<Math.min(rows.length,lim);i++){
+        var r=rows[i];if(!r)continue;var sc=codeScore(r[c]);
+        if(sc){n+=sc;if(f<0)f=i;}
+      }
+      if(n>bh){bh=n;best=c;first=f;}
+    }
+    return bh>0?{c:best,hits:bh,first:first}:null;
+  }
+  function numRatio(rows,c,start,lim){
+    var n=0,f=0;
+    for(var i=start;i<Math.min(rows.length,lim);i++){
+      var r=rows[i];if(!r)continue;var v=r[c];
+      if(v===undefined||v===null||String(v).trim()==="")continue;
+      f++;var q=cellNum(v);if(!isNaN(q)&&q>0)n++;
+    }
+    return f?n/f:0;
+  }
+  // colonna quantita: la piu numerica, preferendo quelle vicine al codice
+  function bestNumCol(rows,excl,start,lim){
+    var ncol=ncolOf(rows),best=-1,bs=-1;
+    for(var c=0;c<ncol;c++){
+      if(c===excl)continue;
+      var rt=numRatio(rows,c,start,lim);
+      if(rt<.7)continue;
+      var sc=rt*100-Math.abs(c-excl);
+      if(sc>bs){bs=sc;best=c;}
+    }
+    return best;
+  }
   function detectLayout(rows){
+    var LIM=400,head=null;
     for(var r=0;r<Math.min(rows.length,20);r++){
       var row=rows[r]||[],ci=-1,qi=-1;
       for(var c=0;c<row.length;c++){
         var v=String(row[c]==null?"":row[c]).toLowerCase();
-        if(ci<0&&/codic|artic|\bcod\b|sigla/.test(v))ci=c;
-        if(qi<0&&/quant|q\.t|qta|pezzi|\bpz\b|\bnum/.test(v))qi=c;
+        if(ci<0&&/codic|artic|\bcod\b|sigla/.test(v)&&!CODE_NO.test(v))ci=c;
+        if(qi<0&&/quant|q\.t|\bqta\b|pezzi|\bpz\b/.test(v)&&!QTY_NO.test(v))qi=c;
       }
-      if(ci>=0&&qi>=0)return {headerIdx:r,dataStart:r+1,colP:ci,colQ:qi};
+      if(ci>=0||qi>=0){head={headerIdx:r,dataStart:r+1,colP:ci,colQ:qi};break;}
     }
-    for(var r2=0;r2<Math.min(rows.length,40);r2++){
-      var row2=rows[r2]||[];
-      for(var c2=0;c2<row2.length;c2++){
-        if(matchByCode(row2[c2])){
-          var qc=-1;
-          for(var c3=0;c3<row2.length;c3++){
-            if(c3===c2)continue;
-            var n=parseFloat(String(row2[c3]).replace(/[^0-9.,-]/g,"").replace(",","."));
-            if(!isNaN(n)&&n>0){qc=c3;break;}
-          }
-          return {headerIdx:(r2>0?r2-1:null),dataStart:r2,colP:c2,colQ:(qc>=0?qc:c2+1)};
-        }
+    var start=head?head.dataStart:0;
+    var best=bestCodeCol(rows,start,LIM);
+    if(head){
+      // l'intestazione puo mentire (es. "Codice pagamento"): vince la colonna con i codici veri
+      if(best&&(head.colP<0||codeHits(rows,head.colP,start,LIM)===0))head.colP=best.c;
+      if(head.colP<0)return null;
+      if(head.colQ<0||numRatio(rows,head.colQ,start,LIM)<.5){
+        var alt=bestNumCol(rows,head.colP,start,LIM);
+        if(alt<0)return null;
+        head.colQ=alt;
       }
+      return head;
+    }
+    if(best){
+      var q=bestNumCol(rows,best.c,best.first,LIM);
+      if(q<0)return null;
+      return {headerIdx:(best.first>0?best.first-1:null),dataStart:best.first,colP:best.c,colQ:q};
     }
     return null;
   }
@@ -1083,22 +1156,98 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
   bdrop.addEventListener("drop",function(ev){if(ev.dataTransfer&&ev.dataTransfer.files[0])readBatchFile(ev.dataTransfer.files[0]);});
   bfile.addEventListener("change",function(){if(bfile.files[0])readBatchFile(bfile.files[0]);});
   function readBatchFile(f){
+    bGroupBy=null;
     $("bdropTitle").textContent=f.name;
     readSheet(f,function(rows){bRows=rows;showBatchMap();},function(msg){$("bmapWrap").innerHTML='<div class="note err">'+msg+'</div>';});
   }
+  var bGroupBy=null,bRaw=null;
   function detectBatchLayout(rows){
-    for(var r=0;r<Math.min(rows.length,20);r++){
-      var row=rows[r]||[],o=-1,cl=-1,co=-1,q=-1;
+    var LIM=260;
+    var norm=function(v){
+      return String(v==null?"":v).toLowerCase()
+        .replace(/[àáâä]/g,"a").replace(/[èéêë]/g,"e").replace(/[ìíîï]/g,"i")
+        .replace(/[òóôö]/g,"o").replace(/[ùúûü]/g,"u")
+        .replace(/[^a-z0-9]/g,"");
+    };
+    // 1) riga di intestazione = la prima con almeno 3 etichette plausibili
+    var hRow=-1;
+    for(var r=0;r<Math.min(rows.length,30);r++){
+      var row=rows[r]||[],sc=0;
       for(var c=0;c<row.length;c++){
-        var v=String(row[c]==null?"":row[c]).toLowerCase();
-        if(co<0&&/codic|artic|\bcod\b|sigla/.test(v))co=c;
-        else if(o<0&&/ordin|documento|\bdoc\b|bolla/.test(v))o=c;
-        if(cl<0&&/client|destinat|ragione sociale|\bcli\b/.test(v))cl=c;
-        if(q<0&&/quant|q\.t|qta|pezzi|\bpz\b/.test(v))q=c;
+        var nv=norm(row[c]);if(!nv)continue;
+        if(/codice|articolo|quantita|ordine|cliente|documento|ragionesociale|ragsociale|anagrafica|numero|descriz|prezzo/.test(nv))sc++;
       }
-      if(o>=0&&co>=0&&q>=0)return {headerIdx:r,dataStart:r+1,colO:o,colC:cl,colP:co,colQ:q};
+      if(sc>=3){hRow=r;break;}
     }
-    return detectBatchByData(rows);
+    if(hRow<0)return detectBatchByData(rows);
+    var hdr=rows[hRow]||[],start=hRow+1,ncol=ncolOf(rows);
+    if(ncol<hdr.length)ncol=hdr.length;
+    // 2) statistiche per colonna
+    var st=[],i,c;
+    for(c=0;c<ncol;c++)st[c]={filled:0,num:0,sum:0,hits:0,dist:{},nd:0};
+    for(i=start;i<Math.min(rows.length,LIM);i++){
+      var rw=rows[i];if(!rw)continue;
+      for(c=0;c<ncol;c++){
+        var v=rw[c];if(v===undefined||v===null||String(v).trim()==="")continue;
+        var t=String(v).trim(),o=st[c];
+        o.filled++;o.dist[t]=1;
+        var q=cellNum(t);
+        if(!isNaN(q)){o.num++;if(q>0)o.sum+=q;}
+        o.hits+=codeScore(t);
+      }
+    }
+    for(c=0;c<ncol;c++)st[c].nd=Object.keys(st[c].dist).length;
+    var nrow=0;for(i=start;i<Math.min(rows.length,LIM);i++){if(rows[i])nrow++;}
+    if(!nrow)return null;
+    var H=[];for(c=0;c<ncol;c++)H[c]=norm(hdr[c]);
+    // 3) codice articolo: la colonna che contiene davvero i codici a catalogo
+    var cP=-1;for(c=0;c<ncol;c++){if(st[c].hits>0&&(cP<0||st[c].hits>st[cP].hits))cP=c;}
+    if(cP<0){
+      for(c=0;c<ncol;c++){if(/codice|articolo|sigla/.test(H[c])&&!CODE_NO.test(H[c])&&st[c].filled){cP=c;break;}}
+    }
+    if(cP<0)return null;
+    // 4) quantità: preferita quella "da evadere/residua" se valorizzata
+    var cQ=-1,cQalt=-1;
+    for(c=0;c<ncol;c++){
+      if(c===cP||!st[c].filled)continue;
+      if(!/quantita|qta|pezzi|^pz$/.test(H[c])&&!/^q(ta|t)?$/.test(H[c]))continue;
+      if(QTY_NO.test(H[c]))continue;
+      if(st[c].num/st[c].filled<.8||st[c].sum<=0)continue;
+      if(/evas|daevadere|residu|alt$|conversion/.test(H[c])){if(cQalt<0)cQalt=c;}   // varianti: solo di scorta
+      else if(cQ<0||H[c]==="quantita")cQ=c;                                          // "Quantità" secca vince
+    }
+    if(cQ<0)cQ=cQalt;
+    if(cQ<0)cQ=bestNumCol(rows,cP,start,LIM);
+    if(cQ<0)return null;
+    // 5) cliente: prima la DESTINAZIONE MERCE, poi la ragione sociale di fatturazione
+    var cC=-1,prio=99,cC2=-1,prio2=99;
+    for(c=0;c<ncol;c++){
+      var h=H[c];if(!st[c].filled||c===cP||c===cQ)continue;
+      if(/agente|orig|amministratore|vettore|cantiere|codice|indirizzo|localita|telefono|fax|email|iva|fiscale|categoria|nazione|provincia|descriz|note|cognome/.test(h))continue;
+      var isRag=/ragionesociale|ragsociale/.test(h);
+      var pr=(isRag&&/destmerce|destinaz/.test(h))?0:(isRag?1:(/denominazione/.test(h)?2:(/cliente/.test(h)?3:(/anagrafica/.test(h)?4:-1))));
+      if(pr<0)continue;
+      if(st[c].nd<1||st[c].nd>=st[c].filled)continue;
+      if(pr<prio){prio2=prio;cC2=cC;prio=pr;cC=c;}
+      else if(pr<prio2){prio2=pr;cC2=c;}
+    }
+    // 6) numero ordine: fra le colonne "numero/ordine/documento" quella che raggruppa davvero
+    var cO=-1,bsc=-1;
+    for(c=0;c<ncol;c++){
+      var hh=H[c];if(c===cP||c===cQ||c===cC)continue;
+      if(!/numero|ordine|documento|bolla|riferimento/.test(hh))continue;
+      if(/data|descriz|tipo|stato|riga|master|totale|^id|idd/.test(hh))continue;
+      var o2=st[c];
+      if(!o2.filled||o2.filled<nrow*.5)continue;
+      if(o2.nd<2||o2.nd>o2.filled*.9)continue;   // costante o quasi tutta diversa: non raggruppa
+      var sc2=o2.nd+(hh.indexOf("ordine")>=0?1000:0);
+      if(sc2>bsc){bsc=sc2;cO=c;}
+    }
+    if(cO<0){ // nessun numero: si raggruppa per cliente
+      if(cC>=0&&st[cC].nd>=2){cO=cC;cC=-1;}
+      else return detectBatchByData(rows);
+    }
+    return {headerIdx:hRow,dataStart:start,colO:cO,colC:cC,colC2:(cC2!==cC?cC2:-1),colP:cP,colQ:cQ};
   }
   // fallback: nessuna intestazione riconoscibile -> si deduce dal contenuto
   function detectBatchByData(rows){
@@ -1154,6 +1303,9 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
   function showBatchMap(){
     if(!bRows||!bRows.length){$("bmapWrap").innerHTML='<div class="note err">Il file risulta vuoto.</div>';return;}
     var bdet=detectBatchLayout(bRows);
+    if(bdet){bRaw={colO:bdet.colO,colC:bdet.colC};}
+    if(bdet&&bGroupBy==="cli"&&bRaw&&bRaw.colC>=0){bdet={headerIdx:bdet.headerIdx,dataStart:bdet.dataStart,colO:bRaw.colC,colC:-1,colP:bdet.colP,colQ:bdet.colQ};}
+    if(bdet&&bGroupBy==="doc"&&bRaw&&bRaw.colO>=0){bdet={headerIdx:bdet.headerIdx,dataStart:bdet.dataStart,colO:bRaw.colO,colC:bRaw.colC,colP:bdet.colP,colQ:bdet.colQ};}
     bLayout=bdet;
     var ncol=0;bRows.forEach(function(r){if(r&&r.length>ncol)ncol=r.length;});
     if(!bLayout)bLayout={headerIdx:0,dataStart:1,colO:0,colC:1,colP:2,colQ:3};
@@ -1167,21 +1319,38 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
       return o+hdr.map(function(h,i){return '<option value="'+i+'"'+(i===sel?" selected":"")+'>'+esc(h)+'</option>';}).join("");
     }
     var nm=function(i){return (i>=0&&hdr[i]!==undefined)?esc(hdr[i]):"—";};
+    var nHit=bdet?codeHits(bRows,bLayout.colP,bLayout.dataStart,400):0;
+    var canSwap=bdet&&bRaw&&bRaw.colO>=0&&bRaw.colC>=0&&bRaw.colO!==bRaw.colC;
+    var swapNow=(bGroupBy==="cli");
     var bsum=bdet
-      ? '<div class="mapsum"><span class="ok">✓ colonne riconosciute</span><span>ordine: <b>'+nm(bLayout.colO)+'</b> · cliente: <b>'+nm(bLayout.colC)+'</b> · codice: <b>'+nm(bLayout.colP)+'</b> · quantità: <b>'+nm(bLayout.colQ)+'</b></span><button class="lnk" id="bmapToggle" type="button">cambia colonne</button></div>'
+      ? '<div class="mapsum"><span class="ok">✓ colonne riconosciute</span>'+
+        '<span>raggruppa per: <b>'+nm(bLayout.colO)+'</b> · codice articolo: <b>'+nm(bLayout.colP)+'</b> ('+nHit+' righe riconosciute) · quantità: <b>'+nm(bLayout.colQ)+'</b></span>'+
+        (canSwap?'<button class="lnk" id="bGroupSwap" type="button">'+(swapNow?'raggruppa per documento':'raggruppa per cliente')+'</button>':'')+
+        '<button class="lnk" id="bmapToggle" type="button">cambia colonne</button></div>'
       : '<div class="mapsum"><span style="color:var(--warn);font-weight:700;">Colonne non riconosciute</span><span>indica quali usare:</span></div>';
     $("bmapWrap").innerHTML='<div class="mapui">'+bsum+'<div class="g" id="bmapFields"'+(bdet?' hidden':'')+'>'+
-      '<div><label style="font-size:.66rem;color:var(--ink-3)">Numero ordine</label><select id="bcolO">'+opt(bLayout.colO)+'</select></div>'+
+      '<div><label style="font-size:.66rem;color:var(--ink-3)">Raggruppa per (n. ordine / cliente)</label><select id="bcolO">'+opt(bLayout.colO)+'</select></div>'+
       '<div><label style="font-size:.66rem;color:var(--ink-3)">Cliente</label><select id="bcolC">'+opt(bLayout.colC,true)+'</select></div>'+
       '<div><label style="font-size:.66rem;color:var(--ink-3)">Codice articolo</label><select id="bcolP">'+opt(bLayout.colP)+'</select></div>'+
       '<div><label style="font-size:.66rem;color:var(--ink-3)">Quantità (pezzi)</label><select id="bcolQ">'+opt(bLayout.colQ)+'</select></div>'+
       '</div><div class="btnrow" id="bmapBtns" style="margin-top:0"'+(bdet?' hidden':'')+'><button class="btn" id="bDoImport" type="button">Calcola tutti gli ordini</button></div></div>';
     ["bcolO","bcolC","bcolP","bcolQ"].forEach(function(id){$(id).addEventListener("change",buildBatch);});
+    if($("bGroupSwap"))$("bGroupSwap").addEventListener("click",function(){bGroupBy=(bGroupBy==="cli")?"doc":"cli";showBatchMap();});
+    $("bIgnoreOnes").onchange=buildBatch;
     $("bDoImport").addEventListener("click",buildBatch);
     if($("bmapToggle"))$("bmapToggle").addEventListener("click",function(){
       var f=$("bmapFields"),b=$("bmapBtns"),h=!f.hidden;f.hidden=h;b.hidden=h;
       $("bmapToggle").textContent=h?"cambia colonne":"nascondi";
     });
+    if(!bdet){
+      var nc=ncolOf(bRows);
+      $("bresults").innerHTML='<div class="card"><div class="empty"><div class="ico">🔎</div>'+
+        '<p>Non riesco a capire da solo le colonne di questo file.</p>'+
+        (nc<3?'<p style="font-size:.8rem;color:var(--ink-3);margin-top:6px;">Ha solo '+nc+' colonne: sembra un ordine singolo, usa la scheda <b>Ordine singolo</b>.</p>'
+             :'<p style="font-size:.8rem;color:var(--ink-3);margin-top:6px;">Indica qui sopra quali sono e premi <b>Calcola tutti gli ordini</b>.</p>')+
+        '</div></div>';
+      return;
+    }
     buildBatch();
   }
   function buildBatch(){
@@ -1192,13 +1361,14 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
       var row=bRows[i];if(!row)continue;
       var num=String(row[cO]===undefined?"":row[cO]).trim();
       var cli=cC>=0?String(row[cC]===undefined?"":row[cC]).trim():"";
+      if(!cli&&bLayout.colC2>=0&&bLayout.colC2!==cC)cli=String(row[bLayout.colC2]===undefined?"":row[bLayout.colC2]).trim();
       var q=parseFloat(String(row[cQ]===undefined?"":row[cQ]).replace(/[^0-9.,-]/g,"").replace(",","."));
       var raw=row[cP],code=matchByCode(raw);
       if(!num&&!code&&isNaN(q))continue;
       righe++;
       if(isNaN(q)||q<=0)continue;
-      if(q<=1){ignored++;continue;}
       if(!code){if(raw!==undefined&&String(raw).trim()!=="")unm.push(String(raw).trim());continue;}
+      if(q<=1&&$("bIgnoreOnes").checked){ignored++;continue;}
       if(cli)cliSet[cli]=1;
       var key=num||"(senza numero)";
       if(!map[key]){map[key]={num:key,cli:cli,items:{}};ordKeys.push(key);}
@@ -1226,7 +1396,7 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
       '<div class="tile hero"><div class="k">Bancali totali</div><div class="v">'+fmt(tp)+'</div><div class="sub">su '+fmt(BATCH.length)+' ordini</div></div>'+
       '<div class="tile"><div class="k">Ordini</div><div class="v">'+fmt(BATCH.length)+'</div><div class="sub">nel file</div></div>'+
       '<div class="tile"><div class="k">Scatole (colli)</div><div class="v">'+fmt(tc)+'</div><div class="sub">da '+fmt(tz)+' pezzi</div></div>'+
-      '<div class="tile"><div class="k">Pezzi totali</div><div class="v">'+fmt(tz)+'</div><div class="sub">esclusi mono-pezzo</div></div></div>';
+      '<div class="tile"><div class="k">Pezzi totali</div><div class="v">'+fmt(tz)+'</div><div class="sub">'+(($("bIgnoreOnes")&&$("bIgnoreOnes").checked)?'esclusi mono-pezzo':'solo codici a catalogo')+'</div></div></div>';
     html+='<div class="card" style="margin-top:18px;"><h3><span>Composizione per ordine</span><small>clicca Modifica per intervenire a mano</small></h3>';
     if(info&&BATCH.length===1&&info.righe>3){
       html+='<p class="note err">Attenzione: è stato trovato <b>un solo numero ordine</b>'+
@@ -1237,7 +1407,7 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
     }
     if(info&&(info.unm&&info.unm.length||info.ignored)){
       var uu=[];(info.unm||[]).forEach(function(x){if(uu.indexOf(x)<0&&uu.length<10)uu.push(x);});
-      html+='<p class="note">'+(info.ignored?info.ignored+' voci da 1 pezzo ignorate. ':'')+(uu.length?('Codici non riconosciuti: '+uu.join(", ")):'')+'</p>';
+      html+='<p class="note">'+(info.ignored?info.ignored+' righe da 1 pezzo ignorate. ':'')+(uu.length?('Codici non riconosciuti: '+uu.join(", ")):'')+'</p>';
     }
     html+='<div class="blist">';
     BATCH.forEach(function(o,i){
