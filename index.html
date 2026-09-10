@@ -101,7 +101,7 @@ header.top{display:flex;flex-direction:column;align-items:center;text-align:cent
 .oline .rm{border:none;background:none;color:var(--ink-3);cursor:pointer;font-size:1rem;line-height:1;padding:2px 4px;}
 .oline .rm:hover{color:var(--bad);}
 .oempty{font-size:.76rem;color:var(--ink-3);text-align:center;padding:14px 6px;}
-.drop{border:1.5px dashed var(--line-2);border-radius:var(--radius-s);padding:15px;text-align:center;cursor:pointer;transition:.15s;background:var(--surface-2);}
+.drop{display:block;border:1.5px dashed var(--line-2);border-radius:var(--radius-s);padding:15px;text-align:center;cursor:pointer;transition:.15s;background:var(--surface-2);}
 .drop:hover,.drop.over{border-color:var(--primary);background:var(--primary-soft);}
 .drop .big{font-weight:600;font-size:.84rem;}
 .drop .sm{font-size:.71rem;color:var(--ink-3);margin-top:3px;}
@@ -177,6 +177,29 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
   padding:3px 8px;font:inherit;font-size:.72rem;cursor:pointer;}
 .pctl .pdel:hover{border-color:var(--bad);color:var(--bad);}
 .pfree{font-size:.66rem;color:var(--ink-3);font-family:"IBM Plex Mono";margin-left:auto;}
+/* tab pagine */
+.tabs{display:flex;gap:8px;justify-content:center;margin:-6px 0 18px;flex-wrap:wrap;}
+.tab{border:1px solid var(--line-2);background:var(--surface);color:var(--ink-2);border-radius:99px;
+  padding:9px 18px;font:inherit;font-size:.84rem;font-weight:600;cursor:pointer;}
+.tab:hover{border-color:var(--primary);color:var(--ink);}
+.tab.on{background:var(--primary);border-color:var(--primary);color:#fff;}
+.batchedit .side{display:none;}
+.batchedit .layout{grid-template-columns:1fr;}
+.batchedit #saveBtn,.batchedit #loadBtn{display:none;}
+.bbanner{display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:var(--primary-soft);
+  border:1px solid var(--primary);border-radius:var(--radius);padding:12px 15px;}
+.bbanner .t{font-family:"Archivo";font-weight:700;font-size:.95rem;color:var(--primary-2);flex:1;}
+/* lista ordini */
+.blist{display:flex;flex-direction:column;gap:12px;margin-top:14px;}
+.bcard{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface-2);overflow:hidden;}
+.bcard .bh{display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap;}
+.bcard .bn{font-family:"Archivo";font-weight:700;font-size:.95rem;}
+.bcard .bcli{color:var(--ink-2);font-size:.84rem;}
+.bcard .bstat{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;}
+.bcard .bbody{padding:10px 14px 13px;font-family:"IBM Plex Mono";font-size:.76rem;color:var(--ink-2);line-height:1.6;}
+.bcard .bbody div{white-space:nowrap;overflow-x:auto;}
+.bcard.mod{border-color:var(--accent);}
+.bedited{background:var(--accent-soft);color:var(--accent-2);}
 .planlist{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-top:12px;}
 .pl-item{border:1px solid var(--line);border-radius:9px;padding:10px 12px;background:var(--surface-2);}
 .pl-h{font-size:.8rem;margin-bottom:5px;}
@@ -294,7 +317,26 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
     </div>
   </header>
 
-  <div class="layout">
+  <div class="tabs" id="tabs">
+    <button class="tab on" data-page="single" type="button">Ordine singolo</button>
+    <button class="tab" data-page="multi" type="button">Più ordini</button>
+  </div>
+
+  <div id="pageMulti" hidden>
+    <div class="card">
+      <h3><span>Carica più ordini</span><small>un unico Excel/CSV</small></h3>
+      <p style="font-size:.8rem;color:var(--ink-2);margin:8px 0 12px;">Il file deve avere una riga per articolo, con le colonne: <b>numero ordine</b>, <b>cliente</b>, <b>codice articolo</b>, <b>quantità</b>. Gli ordini vengono raggruppati e calcolati tutti insieme.</p>
+      <label class="drop" id="bdrop" style="max-width:520px;">
+        <input type="file" id="bfile" accept=".xlsx,.xls,.csv" hidden>
+        <div class="big" id="bdropTitle">Carica il file degli ordini</div>
+        <div class="sm">numero ordine · cliente · codice · quantità</div>
+      </label>
+      <div id="bmapWrap"></div>
+    </div>
+    <div id="bresults" style="margin-top:18px;"></div>
+  </div>
+
+  <div class="layout" id="pageSingle">
     <div class="panel side">
       <div class="sec">
         <h2>Ordine <span class="mini" id="ordCount"></span></h2>
@@ -545,20 +587,19 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
 
   /* ===== compute ===== */
   var LAST=null;
-  function compute(){
-    var lines=[],ignoreOnes=$("ignoreOnes").checked,demand={};
-    Object.keys(ORDER).forEach(function(code){
-      var p=prod(code);if(!p)return;var pieces=ORDER[code];if(pieces<=0)return;
+  function buildPlan(orderMap,ignoreOnes){
+    var lines=[],demand={};
+    Object.keys(orderMap).forEach(function(code){
+      var p=prod(code);if(!p)return;var pieces=orderMap[code];if(pieces<=0)return;
       if(ignoreOnes&&pieces<=1)return;
       var colli=Math.ceil(pieces/p.pz);
       lines.push({p:p,pieces:pieces,colli:colli});
       demand[p.box]=(demand[p.box]||0)+colli;
     });
     lines.sort(function(a,b){return b.colli-a.colli;});
-    var pallets=compose(cloneD(demand));
-    LAST={lines:lines,pallets:pallets,demand:demand};
-    render();
+    return {lines:lines,pallets:compose(cloneD(demand)),demand:demand};
   }
+  function compute(){LAST=buildPlan(ORDER,$("ignoreOnes").checked);render();}
 
   /* ===== render ===== */
   function fmt(n){return (n||0).toLocaleString("it-IT");}
@@ -605,6 +646,11 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
     var byType={};LAST.pallets.forEach(function(p){byType[p.type]=(byType[p.type]||0)+1;});
     var typeStr=Object.keys(byType).map(function(t){return byType[t]+"× "+PALLETS[t].name;}).join(" · ");
     var html="";
+    if(batchIdx!==null&&BATCH[batchIdx]){
+      var bo=BATCH[batchIdx];
+      html+='<div class="bbanner"><span class="t">Ordine '+bo.num+(bo.cli?' · '+bo.cli:'')+'</span>'+
+            '<button class="btn" id="backList" type="button">← Torna alla lista ordini</button></div>';
+    }
     html+='<div class="tiles">'+
       '<div class="tile hero"><div class="k">Bancali totali</div><div class="v">'+fmt(totPal)+'</div><div class="sub">'+typeStr+'</div></div>'+
       '<div class="tile"><div class="k">Prodotti</div><div class="v">'+fmt(LAST.lines.length)+'</div><div class="sub">righe ordine</div></div>'+
@@ -648,6 +694,7 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
     R.innerHTML=html;
     $("copyCsv").addEventListener("click",function(){copy(csvText(),"copyMsg");});
     $("copyPlan").addEventListener("click",function(){copy(planText(),"copyMsg");});
+    var bl=$("backList");if(bl)bl.addEventListener("click",closeBatchOrder);
     wirePlanEditor();
   }
   function wirePlanEditor(){
@@ -661,7 +708,7 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
     var rp=$("resetPlan");
     if(rp)rp.addEventListener("click",function(){compute();});
     Array.prototype.forEach.call(document.querySelectorAll("[data-add]"),function(b){
-      b.addEventListener("click",function(){LAST.pallets.push({type:b.dataset.add,file:[],usedH:0});render();});
+      b.addEventListener("click",function(){LAST.pallets.push({type:b.dataset.add,file:[],usedH:0});if(batchIdx!==null&&BATCH[batchIdx])BATCH[batchIdx].edited=true;render();});
     });
     Array.prototype.forEach.call(document.querySelectorAll(".pdel"),function(b){
       b.addEventListener("click",function(){LAST.pallets.splice(+b.dataset.pidx,1);render();});
@@ -721,7 +768,7 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
     DRAG.el.classList.remove("dragging");
     var d=DRAG;DRAG=null;
     Array.prototype.forEach.call(document.querySelectorAll(".pcard"),function(c){c.classList.remove("dropok","dropno");});
-    if(d.over!==null&&d.over!==undefined){moveFila(d.from,d.fi,d.over);render();}
+    if(d.over!==null&&d.over!==undefined){if(moveFila(d.from,d.fi,d.over)&&batchIdx!==null&&BATCH[batchIdx])BATCH[batchIdx].edited=true;render();}
   }
   function palletCard(pl,n,idx){
     var ed=(idx!==undefined&&idx>=0);
@@ -984,6 +1031,178 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
       $("setSaved").textContent=r.error?("Errore: "+r.error.message):"Salvato per il team ✓";setTimeout(function(){$("setSaved").textContent="";},2500);
     });}
   });
+
+  /* ===== più ordini ===== */
+  var BATCH=[],batchIdx=null,bRows=null,bLayout=null;
+  function setTab(page){
+    Array.prototype.forEach.call(document.querySelectorAll(".tab"),function(t){
+      if(t.getAttribute("data-page")===page)t.className="tab on";else t.className="tab";});
+    $("pageSingle").hidden=(page!=="single");
+    $("pageMulti").hidden=(page!=="multi");
+  }
+  Array.prototype.forEach.call(document.querySelectorAll(".tab"),function(t){
+    t.addEventListener("click",function(){
+      var pg=t.getAttribute("data-page");
+      if(batchIdx!==null){closeBatchOrder();if(pg==="single")setTab("single");return;}
+      setTab(pg);
+    });
+  });
+  function readSheet(f,onRows,onErr){
+    var isCsv=/\.csv$/i.test(f.name),rd=new FileReader();
+    rd.onerror=function(){onErr("Impossibile leggere il file.");};
+    rd.onload=function(e){
+      try{
+        if(isCsv){onRows(parseCSV(String(e.target.result)));return;}
+        if(typeof XLSX==="undefined"){onErr("Libreria Excel non disponibile (rete bloccata?). Salva il file in CSV e ricaricalo.");return;}
+        var wb=XLSX.read(e.target.result,{type:"array"});
+        onRows(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,blankrows:false}));
+      }catch(err){onErr("Impossibile leggere il file: "+err.message);}
+    };
+    if(isCsv)rd.readAsText(f);else rd.readAsArrayBuffer(f);
+  }
+  var bdrop=$("bdrop"),bfile=$("bfile");
+  ["dragover","dragenter"].forEach(function(e){bdrop.addEventListener(e,function(ev){ev.preventDefault();bdrop.classList.add("over");});});
+  ["dragleave","drop"].forEach(function(e){bdrop.addEventListener(e,function(ev){ev.preventDefault();bdrop.classList.remove("over");});});
+  bdrop.addEventListener("drop",function(ev){if(ev.dataTransfer&&ev.dataTransfer.files[0])readBatchFile(ev.dataTransfer.files[0]);});
+  bfile.addEventListener("change",function(){if(bfile.files[0])readBatchFile(bfile.files[0]);});
+  function readBatchFile(f){
+    $("bdropTitle").textContent=f.name;
+    readSheet(f,function(rows){bRows=rows;showBatchMap();},function(msg){$("bmapWrap").innerHTML='<div class="note err">'+msg+'</div>';});
+  }
+  function detectBatchLayout(rows){
+    for(var r=0;r<Math.min(rows.length,20);r++){
+      var row=rows[r]||[],o=-1,cl=-1,co=-1,q=-1;
+      for(var c=0;c<row.length;c++){
+        var v=String(row[c]==null?"":row[c]).toLowerCase();
+        if(co<0&&/codic|artic|\bcod\b|sigla/.test(v))co=c;
+        else if(o<0&&/ordin|documento|\bdoc\b|bolla/.test(v))o=c;
+        if(cl<0&&/client|destinat|ragione sociale|\bcli\b/.test(v))cl=c;
+        if(q<0&&/quant|q\.t|qta|pezzi|\bpz\b/.test(v))q=c;
+      }
+      if(o>=0&&co>=0&&q>=0)return {headerIdx:r,dataStart:r+1,colO:o,colC:cl,colP:co,colQ:q};
+    }
+    return null;
+  }
+  function showBatchMap(){
+    if(!bRows||!bRows.length){$("bmapWrap").innerHTML='<div class="note err">Il file risulta vuoto.</div>';return;}
+    bLayout=detectBatchLayout(bRows);
+    var ncol=0;bRows.forEach(function(r){if(r&&r.length>ncol)ncol=r.length;});
+    if(!bLayout)bLayout={headerIdx:0,dataStart:1,colO:0,colC:1,colP:2,colQ:3};
+    var hdr=[];
+    for(var i=0;i<ncol;i++){
+      var h=(bLayout.headerIdx!=null&&bRows[bLayout.headerIdx])?bRows[bLayout.headerIdx][i]:null;
+      hdr.push((h===undefined||h===null||String(h).trim()==="")?("Colonna "+(i+1)):String(h));
+    }
+    function opt(sel,none){
+      var o=none?'<option value="-1"'+(sel<0?" selected":"")+'>— nessuna —</option>':'';
+      return o+hdr.map(function(h,i){return '<option value="'+i+'"'+(i===sel?" selected":"")+'>'+h+'</option>';}).join("");
+    }
+    $("bmapWrap").innerHTML='<div class="mapui"><div class="g">'+
+      '<div><label style="font-size:.66rem;color:var(--ink-3)">Numero ordine</label><select id="bcolO">'+opt(bLayout.colO)+'</select></div>'+
+      '<div><label style="font-size:.66rem;color:var(--ink-3)">Cliente</label><select id="bcolC">'+opt(bLayout.colC,true)+'</select></div>'+
+      '<div><label style="font-size:.66rem;color:var(--ink-3)">Codice articolo</label><select id="bcolP">'+opt(bLayout.colP)+'</select></div>'+
+      '<div><label style="font-size:.66rem;color:var(--ink-3)">Quantità (pezzi)</label><select id="bcolQ">'+opt(bLayout.colQ)+'</select></div>'+
+      '</div><div class="btnrow" style="margin-top:0"><button class="btn" id="bDoImport" type="button">Calcola tutti gli ordini</button></div></div>';
+    ["bcolO","bcolC","bcolP","bcolQ"].forEach(function(id){$(id).addEventListener("change",buildBatch);});
+    $("bDoImport").addEventListener("click",buildBatch);
+    buildBatch();
+  }
+  function buildBatch(){
+    if(!bRows||!bLayout)return;
+    var cO=+$("bcolO").value,cC=+$("bcolC").value,cP=+$("bcolP").value,cQ=+$("bcolQ").value;
+    var map={},ordKeys=[],unm=[],ignored=0,righe=0;
+    for(var i=bLayout.dataStart;i<bRows.length;i++){
+      var row=bRows[i];if(!row)continue;
+      var num=String(row[cO]===undefined?"":row[cO]).trim();
+      var cli=cC>=0?String(row[cC]===undefined?"":row[cC]).trim():"";
+      var q=parseFloat(String(row[cQ]===undefined?"":row[cQ]).replace(/[^0-9.,-]/g,"").replace(",","."));
+      var raw=row[cP],code=matchByCode(raw);
+      if(!num&&!code&&isNaN(q))continue;
+      righe++;
+      if(isNaN(q)||q<=0)continue;
+      if(q<=1){ignored++;continue;}
+      if(!code){if(raw!==undefined&&String(raw).trim()!=="")unm.push(String(raw).trim());continue;}
+      var key=num||"(senza numero)";
+      if(!map[key]){map[key]={num:key,cli:cli,items:{}};ordKeys.push(key);}
+      if(!map[key].cli&&cli)map[key].cli=cli;
+      map[key].items[code]=(map[key].items[code]||0)+q;
+    }
+    BATCH=ordKeys.map(function(k){
+      var o=map[k],plan=buildPlan(o.items,false);
+      return {num:o.num,cli:o.cli,items:o.items,lines:plan.lines,pallets:plan.pallets,edited:false};
+    });
+    renderBatch({unm:unm,ignored:ignored,righe:righe});
+  }
+  function renderBatch(info){
+    var R=$("bresults");
+    if(!BATCH.length){R.innerHTML='<div class="card"><div class="empty"><div class="ico">📄</div><p>Nessun ordine riconosciuto nel file. Controlla le colonne selezionate.</p></div></div>';return;}
+    var tp=0,tc=0,tz=0;
+    BATCH.forEach(function(o){tp+=o.pallets.length;o.lines.forEach(function(l){tc+=l.colli;tz+=l.pieces;});});
+    var html='<div class="tiles">'+
+      '<div class="tile hero"><div class="k">Bancali totali</div><div class="v">'+fmt(tp)+'</div><div class="sub">su '+fmt(BATCH.length)+' ordini</div></div>'+
+      '<div class="tile"><div class="k">Ordini</div><div class="v">'+fmt(BATCH.length)+'</div><div class="sub">nel file</div></div>'+
+      '<div class="tile"><div class="k">Scatole (colli)</div><div class="v">'+fmt(tc)+'</div><div class="sub">da '+fmt(tz)+' pezzi</div></div>'+
+      '<div class="tile"><div class="k">Pezzi totali</div><div class="v">'+fmt(tz)+'</div><div class="sub">esclusi mono-pezzo</div></div></div>';
+    html+='<div class="card" style="margin-top:18px;"><h3><span>Composizione per ordine</span><small>clicca Modifica per intervenire a mano</small></h3>';
+    if(info&&(info.unm&&info.unm.length||info.ignored)){
+      var uu=[];(info.unm||[]).forEach(function(x){if(uu.indexOf(x)<0&&uu.length<10)uu.push(x);});
+      html+='<p class="note">'+(info.ignored?info.ignored+' voci da 1 pezzo ignorate. ':'')+(uu.length?('Codici non riconosciuti: '+uu.join(", ")):'')+'</p>';
+    }
+    html+='<div class="blist">';
+    BATCH.forEach(function(o,i){
+      var colli=0;o.lines.forEach(function(l){colli+=l.colli;});
+      html+='<div class="bcard'+(o.edited?' mod':'')+'"><div class="bh">'+
+        '<span class="bn">Ordine '+o.num+'</span>'+(o.cli?'<span class="bcli">'+o.cli+'</span>':'')+
+        '<span class="bstat"><span class="badge count">'+o.pallets.length+' bancali</span>'+
+        '<span class="badge count">'+fmt(colli)+' colli</span>'+
+        (o.edited?'<span class="badge bedited">modificato</span>':'')+
+        '<button class="btn mini" data-open="'+i+'" type="button">Modifica</button></span></div><div class="bbody">';
+      o.pallets.forEach(function(pl,k){
+        html+='<div>Bancale '+(k+1)+' · '+PALLETS[pl.type].name+' · '+pl.file.length+' file · h '+fmt(Math.round(heightOf(pl)))+' mm — '+
+          pl.file.map(function(fl){return '['+Object.keys(fl.items).sort(function(a,b){return areaOf(b)-areaOf(a);}).map(function(b){return b+'×'+fl.items[b];}).join('+')+']';}).join(' ')+'</div>';
+      });
+      html+='</div></div>';
+    });
+    html+='</div><div class="btnrow"><button class="btn" id="bCopy" type="button">Copia tutte le composizioni</button><span id="bCopyMsg" style="align-self:center;font-size:.76rem;color:var(--good);"></span></div></div>';
+    R.innerHTML=html;
+    Array.prototype.forEach.call(R.querySelectorAll("[data-open]"),function(b){
+      b.addEventListener("click",function(){openBatchOrder(+b.getAttribute("data-open"));});
+    });
+    $("bCopy").addEventListener("click",function(){copy(batchText(),"bCopyMsg");});
+  }
+  function batchText(){
+    var out=[];
+    BATCH.forEach(function(o){
+      var colli=0;o.lines.forEach(function(l){colli+=l.colli;});
+      out.push("ORDINE "+o.num+(o.cli?" — "+o.cli:"")+"  ("+o.pallets.length+" bancali, "+colli+" colli)"+(o.edited?" [modificato a mano]":""));
+      o.pallets.forEach(function(pl,k){
+        out.push("   Bancale "+(k+1)+" · "+PALLETS[pl.type].name+" · "+pl.file.length+" file · h "+Math.round(heightOf(pl))+" mm: "+
+          pl.file.map(function(fl){return "["+Object.keys(fl.items).map(function(b){return b+"×"+fl.items[b];}).join("+")+"]";}).join(" "));
+      });
+      out.push("");
+    });
+    return out.join("\n");
+  }
+  function openBatchOrder(i){
+    batchIdx=i;
+    var o=BATCH[i];
+    LAST={lines:o.lines,pallets:o.pallets,demand:null};
+    document.body.className="batchedit";
+    setTab("single");
+    editMode=true;
+    render();
+    window.scrollTo(0,0);
+  }
+  function closeBatchOrder(){
+    if(batchIdx!==null&&BATCH[batchIdx]){
+      BATCH[batchIdx].pallets=LAST.pallets.filter(function(p){return p.file.length>0;});
+    }
+    batchIdx=null;editMode=false;
+    document.body.className="";
+    setTab("multi");
+    renderBatch();
+    compute();
+  }
 
   /* ===== modals ===== */
   function openModal(id){$(id).hidden=false;}
