@@ -216,6 +216,8 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
 /* lista ordini */
 .blist{display:flex;flex-direction:column;gap:12px;margin-top:14px;}
 .bcard{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface-2);overflow:hidden;}
+.bcard.cor{border-style:dashed;background:transparent;}
+.bcard.cor .bbody div,.bcard.cor .bbody{white-space:normal;font-size:.74rem;color:var(--ink-2);}
 .bcard .bh{display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap;}
 .bcard .bn{font-family:"Archivo";font-weight:700;font-size:.95rem;}
 .bcard .bcli{color:var(--ink-2);font-size:.84rem;}
@@ -357,6 +359,8 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
       </label>
       <div id="bmapWrap"></div>
       <label class="chk" style="margin-top:10px;"><input type="checkbox" id="bIgnoreOnes"> Ignora anche le righe da 1 pezzo (i codici fuori anagrafica sono già esclusi)</label>
+      <label class="chk"><input type="checkbox" id="bSplitCorriere" checked> Separa le spedizioni corriere — ordini con scatole piene meno del
+        <input type="number" id="bFillMin" value="50" min="0" max="100" step="5" style="width:52px;margin:0 2px;padding:2px 4px;border:1px solid var(--line-2);border-radius:6px;background:var(--surface);color:var(--ink);font:inherit;font-size:.76rem;"> % (privati)</label>
     </div>
     <div id="bresults" style="margin-top:18px;"></div>
   </div>
@@ -566,10 +570,8 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
   // si parte sempre dal bancale piu piccolo: 60x80 -> 80x80 -> 120x80.
   // a parita di file vince il piu piccolo; se servono piu file si sale di formato.
   function pickPallet(demand){
-    var s60=tryOn(demand,"60x80"),s80=tryOn(demand,"80x80");
-    if(s60.rest===0&&s80.rest===0)return (s60.file<=s80.file)?"60x80":"80x80";
-    if(s60.rest===0)return "60x80";
-    if(s80.rest===0)return "80x80";
+    if(tryOn(demand,"60x80").rest===0)return "60x80";   // se ci sta tutto sul piccolo, si usa il piccolo
+    if(tryOn(demand,"80x80").rest===0)return "80x80";
     return "120x80";
   }
   function compose(demand){
@@ -1368,6 +1370,8 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
     ["bcolO","bcolC","bcolP","bcolQ"].forEach(function(id){$(id).addEventListener("change",buildBatch);});
     if($("bGroupSwap"))$("bGroupSwap").addEventListener("click",function(){bGroupBy=(bGroupBy==="cli")?"doc":"cli";showBatchMap();});
     $("bIgnoreOnes").onchange=buildBatch;
+    $("bSplitCorriere").onchange=buildBatch;
+    $("bFillMin").onchange=buildBatch;
     $("bDoImport").addEventListener("click",buildBatch);
     if($("bmapToggle"))$("bmapToggle").addEventListener("click",function(){
       var f=$("bmapFields"),b=$("bmapBtns"),h=!f.hidden;f.hidden=h;b.hidden=h;
@@ -1406,9 +1410,15 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
       if(!map[key].cli&&cli)map[key].cli=cli;
       map[key].items[code]=(map[key].items[code]||0)+q;
     }
+    var fmin=Math.max(0,Math.min(100,+$("bFillMin").value||0))/100;
+    var split=$("bSplitCorriere").checked;
     BATCH=ordKeys.map(function(k){
       var o=map[k],plan=buildPlan(o.items,false);
-      return {num:o.num,cli:o.cli,items:o.items,lines:plan.lines,pallets:plan.pallets,edited:false};
+      var pz=0,cap=0;
+      plan.lines.forEach(function(l){pz+=l.pieces;cap+=l.colli*l.p.pz;});
+      var fill=cap?pz/cap:1;
+      return {num:o.num,cli:o.cli,items:o.items,lines:plan.lines,pallets:plan.pallets,edited:false,
+              fill:fill,corriere:(split&&fill<fmin)};
     });
     renderBatch({unm:unm,ignored:ignored,righe:righe,nCli:Object.keys(cliSet).length,noNum:(ordKeys.length===1&&ordKeys[0]==="(senza numero)")});
   }
@@ -1421,11 +1431,14 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
         '</div></div>';
       if($("bmapFields")){$("bmapFields").hidden=false;if($("bmapBtns"))$("bmapBtns").hidden=false;if($("bmapToggle"))$("bmapToggle").textContent="nascondi";}
       return;}
-    var tp=0,tc=0,tz=0;
-    BATCH.forEach(function(o){tp+=o.pallets.length;o.lines.forEach(function(l){tc+=l.colli;tz+=l.pieces;});});
+    var tp=0,tc=0,tz=0,nb=0,ncor=0;
+    BATCH.forEach(function(o){
+      if(o.corriere){ncor++;return;}
+      nb++;tp+=o.pallets.length;o.lines.forEach(function(l){tc+=l.colli;tz+=l.pieces;});
+    });
     var html='<div class="tiles">'+
-      '<div class="tile hero"><div class="k">Bancali totali</div><div class="v">'+fmt(tp)+'</div><div class="sub">su '+fmt(BATCH.length)+' ordini</div></div>'+
-      '<div class="tile"><div class="k">Ordini</div><div class="v">'+fmt(BATCH.length)+'</div><div class="sub">nel file</div></div>'+
+      '<div class="tile hero"><div class="k">Bancali totali</div><div class="v">'+fmt(tp)+'</div><div class="sub">su '+fmt(nb)+' ordini a bancale</div></div>'+
+      '<div class="tile"><div class="k">Ordini</div><div class="v">'+fmt(BATCH.length)+'</div><div class="sub">'+(ncor?fmt(ncor)+' via corriere':'nel file')+'</div></div>'+
       '<div class="tile"><div class="k">Scatole (colli)</div><div class="v">'+fmt(tc)+'</div><div class="sub">da '+fmt(tz)+' pezzi</div></div>'+
       '<div class="tile"><div class="k">Pezzi totali</div><div class="v">'+fmt(tz)+'</div><div class="sub">'+(($("bIgnoreOnes")&&$("bIgnoreOnes").checked)?'esclusi mono-pezzo':'solo codici a catalogo')+'</div></div></div>';
     html+='<div class="card" style="margin-top:18px;"><h3><span>Composizione per ordine</span><small>clicca Modifica per intervenire a mano</small></h3>';
@@ -1442,6 +1455,7 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
     }
     html+='<div class="blist">';
     BATCH.forEach(function(o,i){
+      if(o.corriere)return;
       var colli=0;o.lines.forEach(function(l){colli+=l.colli;});
       html+='<div class="bcard'+(o.edited?' mod':'')+'"><div class="bh">'+
         '<span class="bn">Ordine '+o.num+'</span>'+(o.cli?'<span class="bcli">'+o.cli+'</span>':'')+
@@ -1455,7 +1469,22 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
       });
       html+='</div></div>';
     });
-    html+='</div><div class="btnrow"><button class="btn" id="bPrint" type="button">🖨 Stampa riepilogo</button>'+
+    html+='</div>';
+    var cor=BATCH.filter(function(o){return o.corriere;});
+    if(cor.length){
+      html+='<h3 style="margin-top:22px;"><span>Spedizioni corriere</span><small>non su bancale · scatole poco piene</small></h3><div class="blist">';
+      cor.forEach(function(o){
+        var cl=0;o.lines.forEach(function(l){cl+=l.colli;});
+        html+='<div class="bcard cor"><div class="bh"><span class="bn">Ordine '+esc(o.num)+'</span>'+
+          (o.cli?'<span class="bcli">'+esc(o.cli)+'</span>':'')+
+          '<span class="bstat"><span class="badge count">'+cl+' colli</span>'+
+          '<span class="badge count">'+Math.round(o.fill*100)+'% pieni</span></span></div><div class="bbody">'+
+          o.lines.map(function(l){return l.p.s+' · '+l.p.d+' — '+fmt(l.pieces)+' pz';}).join(' · ')+
+          '</div></div>';
+      });
+      html+='</div>';
+    }
+    html+='<div class="btnrow"><button class="btn" id="bPrint" type="button">🖨 Stampa riepilogo</button>'+
       '<button class="btn ghost" id="bXls" type="button">⤓ Esporta riepilogo</button>'+
       '<button class="btn ghost" id="bCopy" type="button">Copia tutte le composizioni</button>'+
       '<span id="bCopyMsg" style="align-self:center;font-size:.76rem;color:var(--good);"></span></div></div>';
@@ -1480,6 +1509,7 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
   function batchRows(){
     var out=[];
     BATCH.forEach(function(o){
+      if(o.corriere)return;
       var colli=0;o.lines.forEach(function(l){colli+=l.colli;});
       if(!o.pallets.length){out.push({num:o.num,cli:o.cli,i:"",tp:"",nf:"",h:"",comp:"(nessun bancale)",colli:colli,n:1,edited:o.edited});return;}
       o.pallets.forEach(function(pl,k){
@@ -1490,12 +1520,15 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
     return out;
   }
   function printBatch(){
-    var rows=batchRows(),tp=0,tc=0;
-    BATCH.forEach(function(o){tp+=o.pallets.length;o.lines.forEach(function(l){tc+=l.colli;});});
+    var rows=batchRows(),tp=0,tc=0,nb=0,ncor=0;
+    BATCH.forEach(function(o){
+      if(o.corriere){ncor++;return;}
+      nb++;tp+=o.pallets.length;o.lines.forEach(function(l){tc+=l.colli;});
+    });
     var d=new Date(),dd=("0"+d.getDate()).slice(-2)+"/"+("0"+(d.getMonth()+1)).slice(-2)+"/"+d.getFullYear();
     var h='<div class="prh"><div><h1>Composizione bancali \u2014 riepilogo ordini</h1>'+
       '<div class="sub">Reparto logistica Infermentum \u00b7 '+dd+'</div></div>'+
-      '<div class="tot"><b>'+fmt(tp)+'</b> bancali \u00b7 '+fmt(BATCH.length)+' ordini \u00b7 '+fmt(tc)+' colli</div></div>';
+      '<div class="tot"><b>'+fmt(tp)+'</b> bancali \u00b7 '+fmt(nb)+' ordini \u00b7 '+fmt(tc)+' colli'+(ncor?' \u00b7 '+fmt(ncor)+' via corriere':'')+'</div></div>';
     h+='<table><colgroup><col style="width:8%"><col style="width:25%"><col style="width:5%"><col style="width:8%"><col style="width:5%"><col style="width:6%"><col style="width:43%"></colgroup>'+
       '<thead><tr><th>Ordine</th><th>Destinazione</th><th>N.</th><th>Formato</th><th>File</th><th>h cm</th><th>Composizione (dal basso)</th></tr></thead><tbody>';
     rows.forEach(function(r,k){
@@ -1507,7 +1540,18 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
       }
       h+='<td>'+r.i+'</td><td>'+esc(r.tp)+'</td><td>'+r.nf+'</td><td>'+r.h+'</td><td class="comp">'+esc(r.comp)+'</td></tr>';
     });
-    h+='</tbody></table><div class="foot">P = scatola panettoni 80\u00d740 \u00b7 C = rose/colombe 80\u00d760 \u00b7 5 = salati 60\u00d740 \u00b7 T = bauletti/biscotti 40\u00d720 \u00b7 3 = box miste 40\u00d740. '+
+    h+='</tbody></table>';
+    var cor=BATCH.filter(function(o){return o.corriere;});
+    if(cor.length){
+      h+='<h2 style="font-size:11px;margin:12px 0 4px;">Spedizioni corriere (non su bancale)</h2>'+
+        '<table><colgroup><col style="width:8%"><col style="width:25%"><col style="width:67%"></colgroup><tbody>';
+      cor.forEach(function(o){
+        h+='<tr class="first"><td class="ord">'+esc(o.num)+'</td><td class="cli">'+esc(o.cli||"")+'</td><td>'+
+          esc(o.lines.map(function(l){return l.p.s+' '+fmt(l.pieces)+'pz';}).join(' · '))+'</td></tr>';
+      });
+      h+='</tbody></table>';
+    }
+    h+='<div class="foot">P = scatola panettoni 80\u00d740 \u00b7 C = rose/colombe 80\u00d760 \u00b7 5 = salati 60\u00d740 \u00b7 T = bauletti/biscotti 40\u00d720 \u00b7 3 = box miste 40\u00d740. '+
       'F1 = fila in basso. * = composizione modificata a mano. Stima operativa: verificare sempre stabilit\u00e0 e portata reale.</div>';
     $("printWrap").innerHTML=h;
     window.print();
@@ -1517,6 +1561,15 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
     var head=["N. ordine","Destinazione","Bancale n.","Formato","N. file","Altezza cm","Composizione (per fila, dal basso)","Colli ordine","CORREZIONE (formato)","NOTE"];
     var aoa=[head];
     rows.forEach(function(r){aoa.push([r.num,r.cli||"",r.i,r.tp,r.nf,r.h,r.comp,r.colli,"",""]);});
+    var cor=BATCH.filter(function(o){return o.corriere;});
+    if(cor.length){
+      aoa.push([]);aoa.push(["SPEDIZIONI CORRIERE (non su bancale)"]);
+      aoa.push(["N. ordine","Destinazione","","","","","Prodotti","Colli",""," % scatole piene"]);
+      cor.forEach(function(o){
+        var cl=0;o.lines.forEach(function(l){cl+=l.colli;});
+        aoa.push([o.num,o.cli||"","","","","",o.lines.map(function(l){return l.p.s+" "+l.pieces+"pz";}).join(" · "),cl,"",Math.round(o.fill*100)+"%"]);
+      });
+    }
     var d=new Date(),tag=d.getFullYear()+("0"+(d.getMonth()+1)).slice(-2)+("0"+d.getDate()).slice(-2);
     var name="Riepilogo-bancali-"+tag;
     if(typeof XLSX!=="undefined"&&XLSX.utils&&XLSX.writeFile){
