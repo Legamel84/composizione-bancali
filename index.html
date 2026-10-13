@@ -1632,13 +1632,65 @@ td.mono,th.mono{font-family:"IBM Plex Mono";}
   Array.prototype.forEach.call(document.querySelectorAll("[data-close]"),function(b){b.addEventListener("click",function(){closeModal(b.dataset.close);});});
   Array.prototype.forEach.call(document.querySelectorAll(".modal-bg"),function(bg){bg.addEventListener("click",function(e){if(e.target===bg)bg.hidden=true;});});
 
+  /* ===== aggancio ordine da iMio (?ordine=) ===== */
+  var IMIO_URL="https://gchosfkweodpriatvvqf.supabase.co";
+  var IMIO_KEY="sb_publishable_V3cWKXms38_zkcYZqlT9UA_tcuKi367";
+  var imio=window.supabase?window.supabase.createClient(IMIO_URL,IMIO_KEY):null;
+  var imioDone=false;
+  function qsParam(name){try{return new URLSearchParams(window.location.search).get(name);}catch(e){return null;}}
+  function cleanOrd(v){var s=String(v==null?"":v).trim();if(/\.0$/.test(s))s=s.slice(0,-2);return s;}
+  function imioBanner(html,cls){
+    var b=$("imioBanner");
+    if(!b){
+      b=document.createElement("div");b.id="imioBanner";
+      var host=$("app")||document.body;
+      var anchor=host.querySelector(".tabs")||host.querySelector(".layout");
+      if(anchor&&anchor.parentNode){anchor.parentNode.insertBefore(b,anchor);}
+      else{host.insertBefore(b,host.firstChild);}
+    }
+    b.className="bbanner"+(cls?" "+cls:"");b.style.marginBottom="16px";
+    b.innerHTML=html;
+  }
+  function loadFromIMIO(){
+    if(imioDone)return;imioDone=true;
+    var ordine=cleanOrd(qsParam("ordine"));
+    if(!ordine)return;
+    var cliente=qsParam("cliente")||"";
+    setTab("single");
+    imioBanner('<div class="t">Carico l&rsquo;ordine '+esc(ordine)+' da iMio&hellip;</div>');
+    if(!imio){imioBanner('<div class="t">Ordine '+esc(ordine)+'</div><div style="font-size:.78rem;color:var(--ink-2)">Servizio iMio non raggiungibile: inserisci la composizione manualmente.</div>');return;}
+    imio.from("ordini_imio").select("ordine,anagrafica,pagato,righe").eq("ordine",ordine).limit(1).maybeSingle().then(function(r){
+      if(r.error){imioBanner('<div class="t">Ordine '+esc(ordine)+'</div><div style="font-size:.78rem;color:var(--ink-2)">Errore iMio: '+esc(r.error.message)+'</div>');return;}
+      if(!r.data){imioBanner('<div class="t">Ordine '+esc(ordine)+(cliente?' &middot; '+esc(cliente):'')+'</div><div style="font-size:.78rem;color:var(--warn)">Non trovato in iMio &mdash; componi manualmente il bancale.</div>');return;}
+      var d=r.data,righe=d.righe||[],loaded=0,skipped=[];
+      ORDER={};
+      righe.forEach(function(x){
+        var q=Math.round(+x.q||0);if(q<=0)return;
+        var code=null;
+        if(x.c&&prod(x.c))code=prod(x.c).c;
+        else if(x.c)code=matchByCode(x.c);
+        if(!code)code=matchProduct(x.a||"");
+        if(code&&prod(code)){addProduct(code,q);loaded++;}
+        else if(x.c&&String(x.c).trim()&&!/^(SPED|A03|E06)/i.test(String(x.c))){skipped.push(x.a||x.c);}
+      });
+      renderOrderLines();compute();
+      var nome=d.anagrafica||cliente||"";
+      var pag=d.pagato?('<span style="font-weight:700;color:'+(/NON/i.test(d.pagato)?'var(--bad)':'var(--good)')+'">'+esc(d.pagato)+'</span>'):"";
+      var warn=skipped.length?('<div style="font-size:.74rem;color:var(--warn);margin-top:3px">Da verificare a mano: '+esc(skipped.join(", "))+'</div>'):"";
+      imioBanner('<div class="t">&#128230; Ordine '+esc(ordine)+(nome?' &middot; '+esc(nome):'')+'</div>'+
+        '<div style="font-size:.78rem;color:var(--ink-2)">'+loaded+' articoli caricati da iMio'+(pag?' &middot; '+pag:'')+' &middot; composizione modificabile qui sotto</div>'+warn);
+    }).catch(function(e){
+      imioBanner('<div class="t">Ordine '+esc(ordine)+'</div><div style="font-size:.78rem;color:var(--ink-2)">Errore nel caricamento da iMio: componi manualmente.</div>');
+    });
+  }
+
   /* ===== login / boot ===== */
   var AUTH_DAYS=15, AUTH_KEY="cb_auth_ts";
   function authValid(){try{var t=parseInt(localStorage.getItem(AUTH_KEY),10);if(!t)return false;return (Date.now()-t)<AUTH_DAYS*86400000;}catch(e){return false;}}
   function authTouch(){try{localStorage.setItem(AUTH_KEY,String(Date.now()));}catch(e){}}
   function boot(){
     authTouch();$("overlay").hidden=true;$("app").hidden=false;
-    loadConfig().then(function(){buildProdSelect();buildBoxCat();renderOrderLines();compute();});
+    loadConfig().then(function(){buildProdSelect();buildBoxCat();renderOrderLines();compute();loadFromIMIO();});
   }
   $("loginForm").addEventListener("submit",function(e){
     e.preventDefault();
